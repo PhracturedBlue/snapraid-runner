@@ -39,7 +39,7 @@ def tee_log(infile, out_lines, log_level):
     return t
 
 
-def snapraid_command(command, args={}, *, allow_statuscodes=[]):
+def snapraid_command(command, args={}, *, allow_statuscodes=[], quiet=False):
     """
     Run snapraid command
     Raises subprocess.CalledProcessError if errorlevel != 0
@@ -47,6 +47,8 @@ def snapraid_command(command, args={}, *, allow_statuscodes=[]):
     arguments = ["--conf", config["snapraid"]["config"]]
     for (k, v) in args.items():
         arguments.extend(["--" + k, str(v)])
+    if quiet:
+        arguments.extend("--quiet")
     p = subprocess.Popen(
         [config["snapraid"]["executable"], command] + arguments,
         stdout=subprocess.PIPE,
@@ -123,23 +125,6 @@ def send_email(success):
     server.quit()
 
 
-def get_parity_disks(snaprad_config):
-    disks = set()
-    with open(snapraid_config) as _fh:
-        for line in _fh:
-            if line.startswith('parity'):
-                for parity in line.strip().split(None, 1)[-1].split(','):
-                    try:
-                        diskfree = subprocess.check_output(
-                            ["df", path], stderr=subprocess.DEVNULL, check=True)
-                    except subprocess.CalledProcessError as e:
-                        logging.error("Failed to find mount for %s: %s", parity, e)
-                        continue
-                    partition = diskfree.decode('utf8').splitlines()[-1]
-                    disk = re.sub(r'\d+', '', partition)
-                    disks.add(disk)
-    return disks
-
 def finish(is_success):
     if ("error", "success")[is_success] in config["email"]["sendon"]:
         try:
@@ -182,6 +167,8 @@ def load_config(args):
 
     if args.scrub is not None:
         config["scrub"]["enabled"] = args.scrub
+
+    config["quiet"] = args.quiet
 
 
 def setup_logger():
@@ -226,6 +213,9 @@ def main():
     parser.add_argument("--no-scrub", action='store_false',
                         dest='scrub', default=None,
                         help="Do not scrub (overrides config)")
+    parser.add_argument("-q", "--quiet",
+                        dest='quiet', action='store_true',
+                        help="Disable snapraid progress bar")
     args = parser.parse_args()
 
     if not os.path.exists(args.conf):
@@ -297,7 +287,7 @@ def run():
     else:
         logging.info("Running sync...")
         try:
-            snapraid_command("sync")
+            snapraid_command("sync", quiet=config["quiet"])
         except subprocess.CalledProcessError as e:
             logging.error(e)
             finish(False)
@@ -309,34 +299,12 @@ def run():
             snapraid_command("scrub", {
                 "percentage": config["scrub"]["percentage"],
                 "older-than": config["scrub"]["older-than"],
-            })
+            }, quiet=config["quiet"])
         except subprocess.CalledProcessError as e:
             logging.error(e)
             finish(False)
         logging.info("*" * 60)
 
-    if config["snapraid"]["spindown"]:
-        if sys.platform in ("darwin", "win32"):
-            logging.error("Spindown is not supported on %s", sys.platform)
-            finish(False)
-        logging.info("Running spindown...")
-        if config["scrub"]["enabled"]:
-            try:
-                snapraid_command("sync")
-            except subprocess.CalledProcessError as e:
-                logging.error(e)
-        parity_disks = get_parity_disks(config["snapraid"]["config"])
-        err = False
-        for disk in sorted(parity_disks):
-            logging.info("Running spindown on %s", disk)
-            try:
-                subprocess.run(["hdparm", "-y", disk])
-            except subprocess.CalledProcessError as e:
-                logging.error(e)
-                err = True
-        if err:
-            finish(False)
-        logging.info("*" * 60)
     logging.info("All done")
     finish(True)
 
