@@ -123,6 +123,23 @@ def send_email(success):
     server.quit()
 
 
+def get_parity_disks(snaprad_config):
+    disks = set()
+    with open(snapraid_config) as _fh:
+        for line in _fh:
+            if line.startswith('parity'):
+                for parity in line.strip().split(None, 1)[-1].split(','):
+                    try:
+                        diskfree = subprocess.check_output(
+                            ["df", path], stderr=subprocess.DEVNULL, check=True)
+                    except subprocess.CalledProcessError as e:
+                        logging.error("Failed to find mount for %s: %s", parity, e)
+                        continue
+                    partition = diskfree.decode('utf8').splitlines()[-1]
+                    disk = re.sub(r'\d+', '', partition)
+                    disks.add(disk)
+    return disks
+
 def finish(is_success):
     if ("error", "success")[is_success] in config["email"]["sendon"]:
         try:
@@ -161,6 +178,7 @@ def load_config(args):
     config["scrub"]["enabled"] = (config["scrub"]["enabled"].lower() == "true")
     config["email"]["short"] = (config["email"]["short"].lower() == "true")
     config["snapraid"]["touch"] = (config["snapraid"]["touch"].lower() == "true")
+    config["snapraid"]["spindown"] = (config["snapraid"]["spindown"].lower() == "true")
 
     if args.scrub is not None:
         config["scrub"]["enabled"] = args.scrub
@@ -297,6 +315,28 @@ def run():
             finish(False)
         logging.info("*" * 60)
 
+    if config["snapraid"]["spindown"]:
+        if sys.platform in ("darwin", "win32"):
+            logging.error("Spindown is not supported on %s", sys.platform)
+            finish(False)
+        logging.info("Running spindown...")
+        if config["scrub"]["enabled"]:
+            try:
+                snapraid_command("sync")
+            except subprocess.CalledProcessError as e:
+                logging.error(e)
+        parity_disks = get_parity_disks(config["snapraid"]["config"])
+        err = False
+        for disk in sorted(parity_disks):
+            logging.info("Running spindown on %s", disk)
+            try:
+                subprocess.run(["hdparm", "-y", disk])
+            except subprocess.CalledProcessError as e:
+                logging.error(e)
+                err = True
+        if err:
+            finish(False)
+        logging.info("*" * 60)
     logging.info("All done")
     finish(True)
 
