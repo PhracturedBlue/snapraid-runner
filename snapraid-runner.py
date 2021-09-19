@@ -40,7 +40,7 @@ def tee_log(infile, out_lines, log_level):
     return t
 
 
-def snapraid_command(command, args={}, *, allow_statuscodes=[]):
+def snapraid_command(command, args={}, *, allow_statuscodes=[], quiet=False):
     """
     Run snapraid command
     Raises subprocess.CalledProcessError if errorlevel != 0
@@ -48,6 +48,8 @@ def snapraid_command(command, args={}, *, allow_statuscodes=[]):
     arguments = ["--conf", config["snapraid"]["config"]]
     for (k, v) in args.items():
         arguments.extend(["--" + k, str(v)])
+    if quiet:
+        arguments.extend("--quiet")
     p = subprocess.Popen(
         [config["snapraid"]["executable"], command] + arguments,
         stdout=subprocess.PIPE,
@@ -209,6 +211,8 @@ def load_config(args):
     if args.scrub is not None:
         config["scrub"]["enabled"] = args.scrub
 
+    config["quiet"] = args.quiet
+
 
 def setup_logger():
     log_format = logging.Formatter(
@@ -252,6 +256,9 @@ def main():
     parser.add_argument("--no-scrub", action='store_false',
                         dest='scrub', default=None,
                         help="Do not scrub (overrides config)")
+    parser.add_argument("-q", "--quiet",
+                        dest='quiet', action='store_true',
+                        help="Disable snapraid progress bar")
     args = parser.parse_args()
 
     if not os.path.exists(args.conf):
@@ -323,7 +330,7 @@ def run():
     else:
         logging.info("Running sync...")
         try:
-            snapraid_command("sync")
+            snapraid_command("sync", quiet=config["quiet"])
         except subprocess.CalledProcessError as e:
             logging.error(e)
             finish(False)
@@ -335,7 +342,7 @@ def run():
             snapraid_command("scrub", {
                 "percentage": config["scrub"]["percentage"],
                 "older-than": config["scrub"]["older-than"],
-            })
+            }, quiet=config["quiet"])
         except subprocess.CalledProcessError as e:
             logging.error(e)
             finish(False)
